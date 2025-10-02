@@ -386,7 +386,7 @@ if __name__ == '__main__':
         plot_evaluation_run_with_GPs(dt, states, controls, worst_CBF_psi, worst_CBF_phi, mean_CBF_psi, mean_CBF_phi,
                                      nominal_CBF_psi, nominal_CBF_phi, epsilon_psi, epsilon_phi,
                                      k_delta, true_CBF_psi, true_CBF_phi,
-                                     figure_file='plots/BergmanEvaluationRunTD3.png')
+                                     figure_file=f'plots/BergmanEvaluationRunTD3-Score{score:.0f}.png')
         with open('evaluation_run_details.txt', 'w') as f:
             for i in range(len(states)):
                 f.write(f'Step {i}. Current BG level: {states[i][0]}.\nu_RL: {u_RL_controls[i]}\n'
