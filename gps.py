@@ -28,13 +28,9 @@ def preliminary_computations_for_mnsrc(model):
 
     beta_rows = tf.concat([tf.linalg.matrix_transpose(X_train[:, state_dim:state_dim + 1]),
                            tf.linalg.matrix_transpose(X_train[:, state_dim + 1:])], axis=0)
-    # print(f'beta rows: {beta_rows.numpy()}')
 
     ks = add_likelihood_noise_cov(model.kernel(X_train), model.likelihood, X_train)
     L_hat = tf.linalg.cholesky(ks)
-
-    # eigs = tf.linalg.eigvalsh(ks).numpy()
-    # print('Minimum eigenvalue for ks:', eigs.min())
 
     temp = tf.linalg.triangular_solve(L_hat, Y_train)
     m_right_factor = tf.linalg.triangular_solve(tf.linalg.matrix_transpose(L_hat), temp, lower=False)
@@ -48,8 +44,8 @@ def compute_mean_and_square_root_covariance(x, model, beta_rows, m_right_factor,
     lambda_row_list = []
     lambda_diag_list = []
     for j in range(1 + action_dim):
-        lambda_row_list.append(model.kernel.kernels[j].kernels[1](x, X_train))  # I removed kernels[1].K(x, X_train)
-        lambda_diag_list.append(tf.squeeze(model.kernel.kernels[j].kernels[1](x, x)))  # I removed kernels[1].K(x, x)
+        lambda_row_list.append(model.kernel.kernels[j].kernels[1](x, X_train))
+        lambda_diag_list.append(tf.squeeze(model.kernel.kernels[j].kernels[1](x, x))) 
     lambda_rows = tf.concat(lambda_row_list, axis=0)
     k_bar = lambda_rows * beta_rows
     lambda_diag_seq = tf.stack(lambda_diag_list, axis=0)
