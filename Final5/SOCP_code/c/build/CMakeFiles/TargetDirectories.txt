@@ -1,0 +1,15 @@
+/home/jupyter-1754596.castrogerm-30d92/Final2/SOCP_code/c/build/CMakeFiles/cpg_example.dir
+/home/jupyter-1754596.castrogerm-30d92/Final2/SOCP_code/c/build/CMakeFiles/cpg.dir
+/home/jupyter-1754596.castrogerm-30d92/Final2/SOCP_code/c/build/CMakeFiles/edit_cache.dir
+/home/jupyter-1754596.castrogerm-30d92/Final2/SOCP_code/c/build/CMakeFiles/rebuild_cache.dir
+/home/jupyter-1754596.castrogerm-30d92/Final2/SOCP_code/c/build/CMakeFiles/list_install_components.dir
+/home/jupyter-1754596.castrogerm-30d92/Final2/SOCP_code/c/build/CMakeFiles/install.dir
+/home/jupyter-1754596.castrogerm-30d92/Final2/SOCP_code/c/build/CMakeFiles/install/local.dir
+/home/jupyter-1754596.castrogerm-30d92/Final2/SOCP_code/c/build/CMakeFiles/install/strip.dir
+/home/jupyter-1754596.castrogerm-30d92/Final2/SOCP_code/c/build/solver_code/CMakeFiles/ecos.dir
+/home/jupyter-1754596.castrogerm-30d92/Final2/SOCP_code/c/build/solver_code/CMakeFiles/edit_cache.dir
+/home/jupyter-1754596.castrogerm-30d92/Final2/SOCP_code/c/build/solver_code/CMakeFiles/rebuild_cache.dir
+/home/jupyter-1754596.castrogerm-30d92/Final2/SOCP_code/c/build/solver_code/CMakeFiles/list_install_components.dir
+/home/jupyter-1754596.castrogerm-30d92/Final2/SOCP_code/c/build/solver_code/CMakeFiles/install.dir
+/home/jupyter-1754596.castrogerm-30d92/Final2/SOCP_code/c/build/solver_code/CMakeFiles/install/local.dir
+/home/jupyter-1754596.castrogerm-30d92/Final2/SOCP_code/c/build/solver_code/CMakeFiles/install/strip.dir
