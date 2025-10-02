@@ -8,7 +8,7 @@ from utils import (plot_learning_curve, manage_memory, DT_Bergman_dynamics, plot
 import gpflow
 import tensorflow as tf
 import time
-
+import shutil, os
 
 answer0 = input("Do you want to use CVXPYgen to accelerate the SOCP? (y/n) ")
 while not (answer0 == 'yes' or answer0 == 'Yes' or answer0 == 'YES' or answer0 == 'y' or answer0 == 'Y'
@@ -19,9 +19,8 @@ if answer0 == 'yes' or answer0 == 'Yes' or answer0 == 'YES' or answer0 == 'y' or
 else:
     from cbfcontroller import (DT_CBFs, CBF_with_GPs_SOCP)
 
-
 if __name__ == '__main__':
-    # Our knowledge about dynamics:
+    # Our knowledge about dynamics: nominal model dynamics
     nominal_model_params = {
         'p_1': 2.3e-6,
         'G_b': 75.0,
@@ -52,8 +51,8 @@ if __name__ == '__main__':
 
     # the true model dynamics
     true_model_params = {
-        k: v if k in ('tau_G', 'V_G')  # , 'p_1', 'p_2', 'p_3', 'n')
-        else np.random.choice([0.7, 1.3]) * v  # ideal variation 0.5-1.5, 0.7-1.3 good enough
+        k: v if k in ('tau_G', 'V_G')
+        else np.random.choice([0.7, 1.3]) * v
         for k, v in nominal_model_params.items()
     }
     print(f'\nThe true model parameters:\n{true_model_params}\n')
@@ -63,7 +62,7 @@ if __name__ == '__main__':
 
     N = 24 * 60
     print(f'Total number of steps: {N}.')
-    CHO_max = 65_000  # YOU ASSUME TO KNOW THE MAXIMAL CHO INTAKE, old is 60k g
+    CHO_max = 65_000  # YOU ASSUME TO KNOW THE MAXIMAL CHO INTAKE
 
     CHOs, eating = meal_schedule(N, dt, CHO_max)
 
@@ -87,23 +86,16 @@ if __name__ == '__main__':
         else:
             restore_training = False
 
-    past_bg = 0
-    sample_time_bg = 1 * dt  # it's a sample time used to store prior glucose information, not obtained from sensors
-    # to obtain the usual case --> past_bg = 0 and sample_time_bg = dt
-
     action_dim = 1
     state_dim = 5
     max_action = 30.  # important to guarantee it's a float
     min_action = 0.
-        
+
     max_action_agent = 0.3
     min_action_agent = min_action
     size_action_agent = (max_action_agent - min_action_agent) / 2
     center_action_agent = (max_action_agent + min_action_agent) / 2
     compensator_tr_games = 10
-
-    # The start action agent not only guide the warmup, but introduces a bias in the agent network. Consider this. You
-    # could even think about removing that bias entirely from the actor network, do as you want.
 
     manage_memory()
     agent = Agent(state_dim=state_dim,
@@ -111,16 +103,18 @@ if __name__ == '__main__':
                   max_action=max_action_agent,
                   min_action=min_action_agent,
                   alr=1e-4, clr=1e-3,
-                  max_size=1_000_000, tau=5e-3, d=2, explore_sigma=0.1*size_action_agent,
-                  smooth_sigma=0.2*size_action_agent, c=0.5*size_action_agent, fc1_dims=400, fc2_dims=300,
+                  max_size=1_000_000, tau=5e-3, d=2, explore_sigma=0.1 * size_action_agent,
+                  smooth_sigma=0.2 * size_action_agent, c=0.5 * size_action_agent, fc1_dims=400, fc2_dims=300,
                   batch_size=128)
+    os.makedirs(agent.chkpt_dir, exist_ok=True)
 
     compensator = BarrierCompensator(state_dim=state_dim,
                                      action_dim=action_dim,
                                      max_action=max_action,
                                      min_action=min_action, bar_constraint_max=0.02,
-                                     max_size=N*(compensator_tr_games+1), fc1_dims=30, fc2_dims=20,
+                                     max_size=N * (compensator_tr_games + 1), fc1_dims=30, fc2_dims=20,
                                      epochs=10, num_backtracking=10)
+    os.makedirs(compensator.chkpt_dir, exist_ok=True)
 
     GP_max_size = 1000
     state_normalizer = tf.keras.layers.Normalization()
@@ -171,14 +165,17 @@ if __name__ == '__main__':
     else:
         n_games = 200
         print(f'Number of episodes: {n_games}.')
-        print(f'Collecting for the neural networks starts after {past_bg * sample_time_bg} steps for each episode.')
+        os.makedirs("plots", exist_ok=True)
         plot_reward_function(figure_file='plots/RewardFunction.png')
-        if restore_training:
+        if not restore_training:
+            shutil.rmtree(compensator.chkpt_dir)
+            os.makedirs(compensator.chkpt_dir)
+        else:
             agent.load_models()
             compensator.load_model()
 
         final_sigma = 1e-4
-        exploration_policy = ExplorationPolicy(0.1*size_action_agent, n_games, final_sigma, 1e-6, 20)
+        exploration_policy = ExplorationPolicy(0.1 * size_action_agent, n_games, final_sigma, 1e-6, 20)
 
     time.sleep(5)
 
@@ -189,8 +186,8 @@ if __name__ == '__main__':
         print(f'Episode {j} started.')
 
         if evaluate or (j == 0 and restore_training):
-            psi_model = tf.saved_model.load(GP_psi_dir+'/restored')
-            phi_model = tf.saved_model.load(GP_phi_dir+'/restored')
+            psi_model = tf.saved_model.load(GP_psi_dir + '/restored')
+            phi_model = tf.saved_model.load(GP_phi_dir + '/restored')
         elif j > 0:
             psi_model = tf.saved_model.load(GP_psi_dir)
             phi_model = tf.saved_model.load(GP_phi_dir)
@@ -204,27 +201,19 @@ if __name__ == '__main__':
             explore_sigma = exploration_policy.get_sigma()
 
         for i in range(N):
-            episode_violations.append(max(0., -state[0]+dt_cbfs.BG_min_value, +state[0]-dt_cbfs.BG_max_value))
+            episode_violations.append(max(0., -state[0] + dt_cbfs.BG_min_value, +state[0] - dt_cbfs.BG_max_value))
             print(f'Step {i} started (episode {j}).')
             # print(f'Current state: {state}')
             print(f'Current blood glucose level: {state[0]:.5f}')
-            if i >= past_bg * sample_time_bg:  # Don't collect these steps into the NNs buffer? Then...
-                u_RL = agent.choose_action(state, evaluate, explore_sigma)[0].numpy()
-            else:  # ... don't act on what you don't know, leave the CBF operating alone!
-                u_RL = 0.
-            # u_RL = 0.
+            u_RL = agent.choose_action(state, evaluate, explore_sigma)[0].numpy()
             print(f'u_RL: {u_RL:.5f}')
 
             if j > 0 or evaluate or restore_training:
                 u_bar = compensator.compensation(state)[0].numpy()
-                # u_bar = 0.
                 print(f'u_bar: {u_bar:.5f}')
 
-                # t0 = time.time()
                 (psi_m_r_temp, psi_m_1_temp, psi_Lr_bar_temp,
                  psi_L1_bar_temp) = psi_model.compiled_mean_and_square_root_covariance(state.reshape((1, 5)))
-                # t1 = time.time()
-                # print('\nPsi_r mean&cov calc\nSolve time: %.3f ms' % (1000 * (t1 - t0)))
 
                 if tf.reduce_any(tf.stack([tf.reduce_any(tf.math.is_nan(psi_Lr_bar_temp)),
                                            tf.reduce_any(tf.math.is_nan(psi_L1_bar_temp))])):
@@ -243,15 +232,8 @@ if __name__ == '__main__':
                 phi_m_r, phi_m_1, phi_Lr_bar, phi_L1_bar = (phi_m_r_temp.numpy(), phi_m_1_temp.numpy(),
                                                             phi_Lr_bar_temp.numpy(), phi_L1_bar_temp.numpy())
 
-                # psi_m_r, psi_m_1, psi_Lr_bar, psi_L1_bar = (np.zeros((dt_cbfs.r, 1)),
-                #                                             np.zeros((1, 1)), np.zeros((dt_cbfs.r + 1, dt_cbfs.r)),
-                #                                             np.zeros((dt_cbfs.r + 1, 1)))
-                # phi_m_r, phi_m_1, phi_Lr_bar, phi_L1_bar = (np.zeros((dt_cbfs.r, 1)),
-                #                                             np.zeros((1, 1)), np.zeros((dt_cbfs.r + 1, dt_cbfs.r)),
-                #                                             np.zeros((dt_cbfs.r + 1, 1)))
-
             else:  # basically if we are in the first step of the training phase and not in evaluation,
-                # we restrict ourselves to a simple QP basically
+                # we restrict ourselves to a simple QP
                 u_bar = 0.
                 psi_m_r, psi_m_1, psi_Lr_bar, psi_L1_bar = (np.zeros((1, 1)),  # ----> CORRECT IT, r -> 1, the rest?
                                                             np.zeros((1, action_dim)), np.zeros((1 + action_dim, 1)),
@@ -260,22 +242,11 @@ if __name__ == '__main__':
                                                             np.zeros((1, action_dim)), np.zeros((1 + action_dim, 1)),
                                                             np.zeros((1 + action_dim, action_dim)))
 
-            # print(f'Addition to the mean, when ID=0, to the psi CBF: {psi_m_r}')
-            # print(f'Addition to the mean, when ID=0, to the phi CBF: {phi_m_r}')
-
-            # t0 = time.time()
             a_11, a_21, a_12, a_22 = dt_cbfs.online_CBF_parameters(state)
-            # t1 = time.time()
-            # print('\nOnline CBF params\nSolve time: %.3f ms' % (1000 * (t1 - t0)))
-            # print(f'a params: {a_11}, {a_21}, {a_12}, {a_22}')
 
-            # t0 = time.time()
             sol, A_CBF, b_CBF, c_CBF, d_CBF = cbf_socp.solve(a_11, a_21, a_12, a_22, psi_m_r, psi_m_1, phi_m_r, phi_m_1,
                                                              psi_Lr_bar, phi_Lr_bar, psi_L1_bar, phi_L1_bar,
                                                              u_RL, u_bar)
-            # t1 = time.time()
-            # print('\nSolving online SOCP\nSolve time: %.3f ms' % (1000 * (t1 - t0)))
-            # time.sleep(5)
 
             u_CBF = sol[0]
             print(f'u_CBF: {u_CBF:.5f}')
@@ -311,15 +282,15 @@ if __name__ == '__main__':
             if new_state[0] < 50 or new_state[0] > 250:
                 print('Try again! Blood glucose level went to an overly dangerous hyper/hypoglycemia level!')
                 raise SystemExit
-                
+
             reward = reward_calc(new_state[0])
 
             if not evaluate:
                 state_action = np.concatenate((state, control[:1]), axis=0)  # action needs to be (1,)
                 dt_cbfs.X_ht.add(state_action)
-                    
+
                 if i >= dt_cbfs.r:
-                    dt_cbfs.GP_collect_data(eating[i - dt_cbfs.r])  # OR just dt_cbfs.r?
+                    dt_cbfs.GP_collect_data(eating[i - dt_cbfs.r])
 
                 if j <= compensator_tr_games and not restore_training:
                     compensator.collect_transition(state, u_bar + u_CBF)  # a Line Search algorithm is used to
@@ -328,13 +299,12 @@ if __name__ == '__main__':
                     # agent so to let him train in a stable environment. So maximum precision with LIne Search for small
                     # dataset. Moreover, useless to start collecting again after restoring training and then train,
                     # you'll get the compensator just less precise. So ATTENTION when restoring training: assure the
-                    # previous training had time to at least pass the 5th episode!
+                    # previous training had time to at least pass the last training episode for the compensator!
 
-                if i >= past_bg * sample_time_bg:
-                    agent.collect_transition(state, u_RL, reward, new_state, done=False)
-                    # done=True --> for transitions where the episode terminates by reaching some failure state,
-                    # and not due to the episode running until the max horizon (TD3 paper appendix)
-                    agent.learn()
+                agent.collect_transition(state, u_RL, reward, new_state, done=False)
+                # done=True --> for transitions where the episode terminates by reaching some failure state,
+                # and not due to the episode running until the max horizon (TD3 paper appendix)
+                agent.learn()
 
             score += reward
             state = new_state
@@ -346,10 +316,11 @@ if __name__ == '__main__':
             max_violation_history.append(max(episode_violations))
             score_history.append(score)
             avg_score = np.mean(score_history[-reward_avg_window:])
-            print(f'Episode {j} terminated. Score {score:.1f}. Avg score {avg_score:.1f}.Max violation {max(episode_violations):.1f}.\n')
+            print(
+                f'Episode {j} terminated. Score {score:.1f}. Avg score {avg_score:.1f}.Max violation {max(episode_violations):.1f}.\n')
 
             compensator_saved = False
-            if j <= compensator_tr_games and not restore_training:
+            if j == compensator_tr_games and not restore_training:
                 compensator.learn()
                 compensator_saved = compensator.save_model()
                 print(f"Is the compensator model saved? {compensator_saved}.\n")
@@ -361,7 +332,7 @@ if __name__ == '__main__':
                 print(f"Is the agent model saved? {agent_saved}.\n")
 
             X, Y_psi, Y_phi = dt_cbfs.GP_memory.special_sample_buffer()
-            
+
             _, idx = np.unique(X, axis=0, return_index=True)
             if len(idx) < X.shape[0]:
                 print("Beware: in X there are", X.shape[0] - len(idx), "duplicated rows.")
@@ -372,7 +343,7 @@ if __name__ == '__main__':
             state_normalizer.adapt(X[:, :state_dim])
 
             X_ext = np.concatenate((state_normalizer(X[:, :state_dim]), np.ones((X.shape[0], 1)),
-                                        X[:, state_dim:state_dim + action_dim]), axis=1)
+                                    X[:, state_dim:state_dim + action_dim]), axis=1)
 
             psi_model = gpflow.models.GPR((X_ext, Y_psi), kernel=kernels_psi)
             phi_model = gpflow.models.GPR((X_ext, Y_phi), kernel=kernels_phi)
@@ -407,8 +378,8 @@ if __name__ == '__main__':
             tf.saved_model.save(psi_model, GP_psi_dir)
             tf.saved_model.save(phi_model, GP_phi_dir)
             if agent_saved:
-                tf.saved_model.save(psi_model, GP_psi_dir+'/restored')
-                tf.saved_model.save(phi_model, GP_phi_dir+'/restored')
+                tf.saved_model.save(psi_model, GP_psi_dir + '/restored')
+                tf.saved_model.save(phi_model, GP_phi_dir + '/restored')
         # END GAMES CYCLE
 
     if evaluate:
@@ -420,7 +391,7 @@ if __name__ == '__main__':
             for i in range(len(states)):
                 f.write(f'Step {i}. Current BG level: {states[i][0]}.\nu_RL: {u_RL_controls[i]}\n'
                         f'u_bar: {u_bar_controls[i]}\nu_CBF: {u_CBF_controls[i]}\n'
-                        f'Pre-pump u: {u_RL_controls[i]+u_bar_controls[i]+u_CBF_controls[i]}\n')
+                        f'Pre-pump u: {u_RL_controls[i] + u_bar_controls[i] + u_CBF_controls[i]}\n')
     else:
         x = [i + 1 for i in range(len(score_history))]
         plot_learning_curve(x, score_history, reward_avg_window, figure_file='plots/BergmanTrainingScoreTD3.png')
