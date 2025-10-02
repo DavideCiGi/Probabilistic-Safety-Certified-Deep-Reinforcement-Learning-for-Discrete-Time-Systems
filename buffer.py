@@ -2,15 +2,14 @@ import numpy as np
 
 
 class DReplayBuffer:
-    def __init__(self, max_size, state_dim, action_dim):  # input shape of observation from our environment
-        # action_dim --> It's the number of components of the action.
+    def __init__(self, max_size, state_dim, action_dim): 
         self.mem_size = max_size
-        self.mem_cntr = 0  # it's a memory counter, initiated to zero
-        self.state_memory = np.zeros((self.mem_size, state_dim))  # the star * just unpack a list of elements
+        self.mem_cntr = 0 
+        self.state_memory = np.zeros((self.mem_size, state_dim))
         self.new_state_memory = np.zeros((self.mem_size, state_dim))
         self.action_memory = np.zeros((self.mem_size, action_dim))
         self.reward_memory = np.zeros(self.mem_size)
-        self.terminal_memory = np.zeros(self.mem_size, dtype=np.bool_)  # we're going to use it as a mask in the agent
+        self.terminal_memory = np.zeros(self.mem_size, dtype=np.bool_)
 
     def store_transition(self, state, action, reward, next_state, done):
         index = self.mem_cntr % self.mem_size
