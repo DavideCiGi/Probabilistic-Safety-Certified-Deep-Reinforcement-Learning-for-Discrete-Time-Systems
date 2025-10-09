@@ -8,7 +8,8 @@ from utils import (plot_learning_curve, manage_memory, DT_Bergman_dynamics, plot
 import gpflow
 import tensorflow as tf
 import time
-import shutil, os
+import shutil
+import os
 
 answer0 = input("Do you want to use CVXPYgen to accelerate the SOCP? (y/n) ")
 while not (answer0 == 'yes' or answer0 == 'Yes' or answer0 == 'YES' or answer0 == 'y' or answer0 == 'Y'
@@ -317,7 +318,7 @@ if __name__ == '__main__':
             score_history.append(score)
             avg_score = np.mean(score_history[-reward_avg_window:])
             print(
-                f'Episode {j} terminated. Score {score:.1f}. Avg score {avg_score:.1f}.Max violation {max(episode_violations):.1f}.\n')
+                f'Episode {j} terminated. Score {score:.1f}. Avg score {avg_score:.1f}. Max violation {max(episode_violations):.1f}.\n')
 
             compensator_saved = False
             if j == compensator_tr_games and not restore_training:
