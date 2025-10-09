@@ -1,325 +1,186 @@
-import sympy as sp
-import numpy as np
-from utils import HistoryTracker
-from buffer import GPBuffer
-import cvxpy as cp
-import math
-
-class DT_CBFs:
-    def __init__(self, dt, nominal_model_params, CBF1_params, CBF2_params, CHO_max, GP_max_size,
-                 episode_length, true_model_params):
-
-        r = 3  # relative degree
-        BG_max_value = 180
-        BG_min_value = 90
-
-        BG_min = sp.symbols('BG_{min}', real=True)
-        BG_max = sp.symbols('BG_{max}', real=True)
-
-        G_temp = [sp.symbols(f"G({i})", real=True) for i in range(r + 1)]
-
-        h_1 = [g - BG_min for g in G_temp]
-        h_2 = [- g + BG_max for g in G_temp]
-        # barrier function evaluated at subsequent time steps
-
-        # Now I will just build a matrix psi in order to get the expression of the
-        # DT H-O CBF. It's just a matrix with no real meaning (for now)
-        psi = sp.Matrix([sp.symbols(f'psi_{i}{j}', real=True)
-                         for i in range(r + 1) for j in range(r + 1)], real=True).reshape(r + 1, r + 1)
-        phi = sp.Matrix([sp.symbols(f'phi_{i}{j}', real=True)
-                         for i in range(r + 1) for j in range(r + 1)], real=True).reshape(r + 1, r + 1)
-
-        for j in range(r + 1):
-            psi[0, j] = h_1[j]
-            phi[0, j] = h_2[j]
-
-        gamma_1 = [sp.Symbol(f'\gamma_{{{i + 1}, 1}}', real=True) for i in range(r)]
-        gamma_2 = [sp.Symbol(f'\gamma_{{{i + 1}, 2}}', real=True) for i in range(r)]
-
-        for i in range(r):
-            for j in range(r - i):
-                psi[i + 1, j] = psi[i, j + 1] - psi[i, j] + gamma_1[i] * psi[i, j]
-                phi[i + 1, j] = phi[i, j + 1] - phi[i, j] + gamma_2[i] * phi[i, j]
-        # Now let's retrieve the actual symbolic expressions for the psi functions!
-
-        # What you actually retrieve is the series of functions built over the cbf
-        # but only as a linear combination of the cbf evaluated up till the r step
-        psi_r = psi[-1, 0].copy()
-        phi_r = phi[-1, 0].copy()
-
-        psi_actual = psi[1:, 0].copy()
-        phi_actual = phi[1:, 0].copy()
-
-        delta = sp.Symbol(r'\Delta t', real=True)  # sampling time
-        p_1, G_b, p_2, p_3, n, I_b, tau_G, V_G = sp.symbols(
-            'p_1, G_b, p_2, p_3, n, I_b, tau_G, V_G', real=True)
-
-        G = [sp.symbols(f"G({i})", real=True) for i in range(r + 1)]
-        X = [sp.symbols(f"X({i})", real=True) for i in range(r + 1)]
-        I = [sp.symbols(f"I({i})", real=True) for i in range(r + 1)]
-        D_2 = [sp.symbols(f"D_{{2}}({i})", real=True) for i in range(r + 1)]
-        D_1 = [sp.symbols(f"D_{{1}}({i})", real=True) for i in range(r + 1)]
-        state_dim = 5
-
-        ID = [sp.symbols(f"ID({i})", real=True) for i in range(r + 1)]
-        action_dim = 1
-        CHO = [sp.symbols(f"CHO({i})", real=True) for i in range(r + 1)]
-
-        for i in range(r):
-            G[i + 1] = G[i] + delta * (- p_1 * (G[i] - G_b) - G[i] * X[i] + (1 / (V_G * tau_G)) * D_2[i])
-            X[i + 1] = X[i] + delta * (- p_2 * X[i] + p_3 * (I[i] - I_b))
-            I[i + 1] = I[i] + delta * (- n * (I[i] - I_b) + ID[i])
-            D_2[i + 1] = D_2[i] + delta * (- D_2[i] / tau_G + D_1[i] / tau_G)
-            D_1[i + 1] = D_1[i] + delta * (- D_1[i] / tau_G + CHO[i])
-
-        psi_r = psi_r.subs(dict(zip(G_temp, G)))  # CHECK
-        phi_r = phi_r.subs(dict(zip(G_temp, G)))
-
-        psi_true_r = psi_r.copy()
-        phi_true_r = phi_r.copy()
-
-        nominal_model_params = {
-            p_1: nominal_model_params['p_1'],
-            G_b: nominal_model_params['G_b'],
-            p_2: nominal_model_params['p_2'],
-            p_3: nominal_model_params['p_3'],
-            n: nominal_model_params['n'],
-            I_b: nominal_model_params['I_b'],
-            tau_G: nominal_model_params['tau_G'],
-            V_G: nominal_model_params['V_G']
-        }
-
-        true_model_params = {
-            p_1: true_model_params['p_1'],
-            G_b: true_model_params['G_b'],
-            p_2: true_model_params['p_2'],
-            p_3: true_model_params['p_3'],
-            n: true_model_params['n'],
-            I_b: true_model_params['I_b'],
-            tau_G: true_model_params['tau_G'],
-            V_G: true_model_params['V_G']
-        }
-
-        shared_params = {BG_min: BG_min_value, BG_max: BG_max_value, delta: dt}
-
-        nominal_model_params.update(shared_params)
-        true_model_params.update(shared_params)
-
-        CBF1_params = {
-            gamma_1[0]: CBF1_params['gamma_11'],
-            gamma_1[1]: CBF1_params['gamma_21'],
-            gamma_1[2]: CBF1_params['gamma_31']
-        }
-
-        CBF2_params = {
-            gamma_2[0]: CBF2_params['gamma_12'],
-            gamma_2[1]: CBF2_params['gamma_22'],
-            gamma_2[2]: CBF2_params['gamma_32']
-        }
-
-        if not (len(CBF1_params) == len(CBF2_params)) & (len(CBF1_params) == r):  # it is necessary because
-            # in the main loop, in the first training step, I am assuming len(CBF_1_params) == dt_cbfs.r! Since SOCP
-            # utilizes len(CBF_1_params) to get the relative degree!
-            raise ValueError(f'The number of auxiliary functions parameters {len(CBF1_params)}'
-                             f' and {len(CBF2_params)} does not coincide with the input relative degree {r}!')
-
-        psi_r = psi_r.subs(nominal_model_params).subs(CBF1_params)
-        phi_r = phi_r.subs(nominal_model_params).subs(CBF2_params)
-
-        psi_true_r = psi_true_r.subs(true_model_params).subs(CBF1_params)  # of course we shouldn't have access to the true
-        # parameters. This is just a way to double check if what we're doing is ok or not. You can even eliminate it
-        phi_true_r = phi_true_r.subs(true_model_params).subs(CBF2_params)
-
-        psi_actual = psi_actual.subs(shared_params).subs(CBF1_params)
-        phi_actual = phi_actual.subs(shared_params).subs(CBF2_params)
-
-        # let's implement robustness, CHO[0] intervenes at psi[r], phi[r], so it
-        # doesn't intervene the initial check of the CBFs.
-        meal_tol = 0.
-        psi0_r = psi_r.subs({CHO[0]: 0.})
-        phi0_r = phi_r.subs({CHO[0]: 0.})
-        psi_r = psi_r.subs({CHO[0]: -meal_tol})
-        phi_r = phi_r.subs({CHO[0]: CHO_max+meal_tol})
-
-        psi_true_r = psi_true_r.subs({CHO[0]: -meal_tol})
-        phi_true_r = phi_true_r.subs({CHO[0]: CHO_max+meal_tol})
-
-        psi_r_function = sp.lambdify(
-            (G[0], X[0], I[0], D_2[0], D_1[0], ID[0]), psi_r, modules='numpy')
-        psi0_r_function = sp.lambdify(
-            (G[0], X[0], I[0], D_2[0], D_1[0], ID[0]), psi0_r, modules='numpy')
-        phi_r_function = sp.lambdify(
-            (G[0], X[0], I[0], D_2[0], D_1[0], ID[0]), phi_r, modules='numpy')
-        phi0_r_function = sp.lambdify(
-            (G[0], X[0], I[0], D_2[0], D_1[0], ID[0]), phi0_r, modules='numpy')
-        psi_true_r_function = sp.lambdify(
-            (G[0], X[0], I[0], D_2[0], D_1[0], ID[0]), psi_true_r, modules='numpy')
-        phi_true_r_function = sp.lambdify(
-            (G[0], X[0], I[0], D_2[0], D_1[0], ID[0]), phi_true_r, modules='numpy')
-
-        self.psi_r_function = psi_r_function
-        self.phi_r_function = phi_r_function
-        self.psi_true_r_function = psi_true_r_function
-        self.phi_true_r_function = phi_true_r_function
-        self.psi0_r_function = psi0_r_function
-        self.phi0_r_function = phi0_r_function
-
-        self.r = r
-
-        self.psi_actual = psi_actual
-        self.phi_actual = phi_actual
-        self.G_temp = G_temp
-
-        self.dt = dt
-
-        self.GP_memory = GPBuffer(GP_max_size, state_dim, action_dim, episode_length)
-        self.X_ht = HistoryTracker(r, 1, state_dim + action_dim)
-
-        self.BG_max_value = BG_max_value
-        self.BG_min_value = BG_min_value
-
-    def online_CBF_parameters(self, x0):
-        a_21 = self.psi_r_function(x0[0], x0[1], x0[2], x0[3], x0[4], 0.0)
-        a_11 = self.psi_r_function(x0[0], x0[1], x0[2], x0[3], x0[4], 1.0) - a_21
-
-        a_22 = self.phi_r_function(x0[0], x0[1], x0[2], x0[3], x0[4], 0.0)
-        a_12 = self.phi_r_function(x0[0], x0[1], x0[2], x0[3], x0[4], 1.0) - a_22
-
-        return a_11, a_21, a_12, a_22
-
-    def online_true_CBF_parameters(self, x0):
-        at_21 = self.psi_true_r_function(x0[0], x0[1], x0[2], x0[3], x0[4], 0.0)
-        at_11 = self.psi_true_r_function(x0[0], x0[1], x0[2], x0[3], x0[4], 1.0) - at_21
-
-        at_22 = self.phi_true_r_function(x0[0], x0[1], x0[2], x0[3], x0[4], 0.0)
-        at_12 = self.phi_true_r_function(x0[0], x0[1], x0[2], x0[3], x0[4], 1.0) - at_22
-
-        return at_11, at_21, at_12, at_22
-
-    def GP_collect_data(self, eating):
-        if not eating:
-            previous_state_action = self.X_ht.history[-1]  # old action, 3 steps before the current one
-            psi_error = self.psi_actual[-1].copy()
-            phi_error = self.phi_actual[-1].copy()
-            psi_estimate = (self.psi0_r_function(*previous_state_action)).copy()
-            phi_estimate = (self.phi0_r_function(*previous_state_action)).copy()
-            for k in range(self.r+1):
-                psi_error = psi_error.subs({self.G_temp[k]: self.X_ht.history[-(k+1), 0]})
-                phi_error = phi_error.subs({self.G_temp[k]: self.X_ht.history[-(k+1), 0]})
-            psi_error -= psi_estimate
-            phi_error -= phi_estimate
-            self.GP_memory.store(previous_state_action, psi_error, phi_error)
+import tensorflow as tf
+from tensorflow import keras
+from networks import ActorNetwork, CriticNetwork
+from buffer import ReplayBuffer
 
 
-class CBF_with_GPs_SOCP:
-    def __init__(self, k_delta, K_eps_1, K_eps_2, max_action, min_action, gamma_1_dict, gamma_2_dict):
-        self.k_delta = k_delta
-        self.min_action = min_action
+def polyak_update(params, target_params, tau):
+    for param, target_param in zip(params, target_params):
+        target_param.assign(tau * param + (1.0 - tau) * target_param)
+
+
+class Agent:
+    def __init__(self, state_dim, action_dim, max_action, min_action, alr=1e-4, clr=1e-3,
+                 gamma=0.99, max_size=1_000_000, tau=5e-3, d=2, explore_sigma=0.1, smooth_sigma=0.2, c=0.5,
+                 fc1_dims=400, fc2_dims=300, batch_size=128, chkpt_dir='models/td3/'):
+        self.c = c
+        self.smooth_sigma = smooth_sigma
+        self.explore_sigma = explore_sigma
+        self.gamma = gamma
+        self.action_dim = action_dim
         self.max_action = max_action
-        gamma_1 = list(gamma_1_dict.values())
-        gamma_2 = list(gamma_2_dict.values())
+        self.min_action = min_action
+        self.d = d
+        self.tau = tau
+        self.memory = ReplayBuffer(max_size, state_dim, action_dim)
+        self.batch_size = batch_size
+        self.chkpt_dir = chkpt_dir
+        self.learn_step_cntr = 0
 
-        r = 1
+        self.actor = ActorNetwork(action_dim=action_dim, state_dim=state_dim, max_action=self.max_action,
+                                  min_action=self.min_action, fc1_dims=fc1_dims,
+                                  fc2_dims=fc2_dims)
+        self.critic_1 = CriticNetwork(action_dim=action_dim, state_dim=state_dim, fc1_dims=fc1_dims, fc2_dims=fc2_dims)
+        self.critic_2 = CriticNetwork(action_dim=action_dim, state_dim=state_dim, fc1_dims=fc1_dims, fc2_dims=fc2_dims)
+        self.target_actor = ActorNetwork(action_dim=action_dim, state_dim=state_dim, max_action=self.max_action,
+                                         min_action=self.min_action, fc1_dims=fc1_dims,
+                                         fc2_dims=fc2_dims)
+        self.target_critic_1 = CriticNetwork(action_dim=action_dim, state_dim=state_dim, fc1_dims=fc1_dims,
+                                             fc2_dims=fc2_dims)
+        self.target_critic_2 = CriticNetwork(action_dim=action_dim, state_dim=state_dim, fc1_dims=fc1_dims,
+                                             fc2_dims=fc2_dims)
 
-        m = 4
-        n = 4
-        f = cp.Constant(np.array([0., 0., 0., 1.]))
+        # Consider gradient clipping because GPs have limited memory, and we can't afford to let the actors grow
+        # too much by exploring state-actions that the GPs haven't seen or no longer have in memory!
+        self.actor_optimizer = keras.optimizers.Adam(learning_rate=alr, clipnorm=5.)
+        self.critic_1_optimizer = keras.optimizers.Adam(learning_rate=clr, clipnorm=5.)
+        self.critic_2_optimizer = keras.optimizers.Adam(learning_rate=clr, clipnorm=5.)
 
-        A_1 = cp.Constant(np.diag([1., np.sqrt(K_eps_1), np.sqrt(K_eps_2), 0.]))
-        A_2 = cp.Constant(np.hstack((np.array([[2.]]), np.zeros((1, 3)))))
-        A_31 = cp.Parameter(shape=(r + 1, 1), name='A_31')
-        A_32 = cp.Constant(np.zeros((r + 1, 3)))
-        A_3 = cp.hstack([A_31, A_32])
-        A_41 = cp.Parameter(shape=(r + 1, 1), name='A_41')
-        A_42 = cp.Constant(np.zeros((r + 1, 3)))
-        A_4 = cp.hstack([A_41, A_42])
+        dummy_state = tf.zeros((1, state_dim), dtype=tf.float32)
+        dummy_action = tf.zeros((1, action_dim), dtype=tf.float32)
 
-        A = [A_1, A_2, A_3, A_4]
+        self.actor(dummy_state)
+        self.critic_1((dummy_state, dummy_action))
+        self.critic_2((dummy_state, dummy_action))
+        self.target_actor(dummy_state)
+        self.target_critic_1((dummy_state, dummy_action))
+        self.target_critic_2((dummy_state, dummy_action))
 
-        b_1 = cp.Constant(np.zeros(1))
-        b_2 = cp.Parameter(shape=(1,), name='b_2')   # CHECK???
-        b_3 = cp.Parameter(shape=(r + 1,), name='b_3')
-        b_4 = cp.Parameter(shape=(r + 1,), name='b_4')
+        optimizers_to_prime = [(self.actor_optimizer, self.actor.trainable_variables),
+                               (self.critic_1_optimizer, self.critic_1.trainable_variables),
+                               (self.critic_2_optimizer, self.critic_2.trainable_variables)]
 
-        b = [b_1, b_2, b_3, b_4]
+        for optimizer, params in optimizers_to_prime:
+            if params:
+                dummy_grads = [tf.zeros_like(p) for p in params]
+                optimizer.apply_gradients(zip(dummy_grads, params))
 
-        c_1 = cp.Constant(np.concatenate((np.zeros(3), np.array([1.]))))
-        c_2 = cp.Constant(np.zeros(n))
-        c_31 = cp.Parameter(name="c_31")
-        c_32 = cp.Constant(np.concatenate((np.array([math.prod(gamma_1)]), np.zeros(2))))
-        c_3 = cp.hstack([c_31, c_32])
-        c_41 = cp.Parameter(name="c_41")
-        c_42 = cp.Constant(np.concatenate((np.zeros(1), np.array([math.prod(gamma_2)]), np.zeros(1))))
-        c_4 = cp.hstack([c_41, c_42])
+        self.update_network_trainable_parameters(tau=1)
+        self.update_network_non_trainable_parameters()
 
-        c = [c_1, c_2, c_3, c_4]
+        self.ckpt = tf.train.Checkpoint(actor=self.actor,
+                                        critic_1=self.critic_1,
+                                        critic_2=self.critic_2,
+                                        target_actor=self.target_actor,
+                                        target_critic_1=self.target_critic_1,
+                                        target_critic_2=self.target_critic_2,
+                                        actor_optimizer=self.actor_optimizer,
+                                        critic_1_optimizer=self.critic_1_optimizer,
+                                        critic_2_optimizer=self.critic_2_optimizer)
 
-        d_1 = cp.Constant(np.zeros(1))
-        d_2 = cp.Constant(np.array([(self.max_action - self.min_action)]))
-        d_3 = cp.Parameter(shape=(1,), name='d_3')
-        d_4 = cp.Parameter(shape=(1,), name='d_4')
+        self.ckpt_manager = tf.train.CheckpointManager(self.ckpt, self.chkpt_dir, max_to_keep=3)
 
-        d = [d_1, d_2, d_3, d_4]
+    def save_models(self):
+        if self.memory.mem_cntr < self.batch_size:
+            # agent doesn't go into learning, no need to save the parameters (and it's not possible regardless until
+            # the agent goes into learning which happens when buffer has at least one possible batch).
+            return False
+        else:
+            print('... saving models ...')
+            self.ckpt_manager.save()
+            return True
 
-        # Define and solve the CVXPY problem.
-        x = cp.Variable(n, name='x')
+    def load_models(self):
+        print('... loading models ...')
+        self.ckpt.restore(self.ckpt_manager.latest_checkpoint)
+        if self.ckpt_manager.latest_checkpoint:
+            print(f'Model restored from latest checkpoint.')
+        else:
+            print('No checkpoint found.')
 
-        # We use cp.SOC(t, x) to create the SOC constraint ||x||_2 <= t.
-        soc_constraints = [
-            cp.SOC(c[j].T @ x + d[j], A[j] @ x + b[j]) for j in range(m)
-        ]
+    def collect_transition(self, state, action, reward, next_state, done):
+        self.memory.store_transition(state, action, reward, next_state, done)
 
-        l_constraints = [
-            x[-3] >= 0.,
-            x[-2] >= 0.
-        ]
+    def choose_action(self, observation, evaluate=False, explore_sigma=None):
+        if explore_sigma is None:
+            explore_sigma = self.explore_sigma
+        state = tf.convert_to_tensor([observation], dtype=tf.float32)
+        mu = self.actor(state)[0]
+        if not evaluate:  # it might be good to ensure the exploration doesn't give zero at all for stability
+            mu += tf.random.normal(shape=[self.action_dim], mean=0.0, stddev=explore_sigma)
+        mu = tf.clip_by_value(mu, self.min_action, self.max_action)
+        return mu
 
-        self.prob = cp.Problem(cp.Minimize(f.T @ x),
-                               soc_constraints + l_constraints)
-        # print(self.prob)
-        # print("Is DPP? ", self.prob.is_dcp(dpp=True))
-        # print("Is DCP? ", self.prob.is_dcp(dpp=False))
+    def update_network_trainable_parameters(self, tau=None):
+        if tau is None:
+            tau = self.tau
 
-        self.A_32 = A_32
-        self.A_42 = A_42
-        self.c_32 = c_32
-        self.c_42 = c_42
+        polyak_update(self.actor.trainable_variables, self.target_actor.trainable_variables, tau)
+        polyak_update(self.critic_1.trainable_variables, self.target_critic_1.trainable_variables, tau)
+        polyak_update(self.critic_2.trainable_variables, self.target_critic_2.trainable_variables, tau)
 
-    def solve(self, a_11, a_21, a_12, a_22, psi_m_r, psi_m_1, phi_m_r, phi_m_1, psi_Lr_bar, phi_Lr_bar,
-              psi_L1_bar, phi_L1_bar, u_RL, u_bar):
+    def update_network_non_trainable_parameters(self, tau=None):
+        if tau is None:
+            tau = 1.
 
-        A_31 = self.k_delta * psi_L1_bar
-        A_41 = self.k_delta * phi_L1_bar
-        b_2 = np.array([2 * (u_RL + u_bar) - (self.max_action + self.min_action)])
-        b_3 = np.squeeze(self.k_delta * (psi_Lr_bar @ np.array([[1.]]) + psi_L1_bar * (u_RL + u_bar)))
-        b_4 = np.squeeze(self.k_delta * (phi_Lr_bar @ np.array([[1.]]) + phi_L1_bar * (u_RL + u_bar)))
-        c_31 = a_11 + np.squeeze(psi_m_1)
-        c_41 = a_12 + np.squeeze(phi_m_1)
-        d_3 = np.array([a_21 + np.squeeze(psi_m_r.T @ np.array([[1.]])) + (a_11 + np.squeeze(psi_m_1)) * (u_RL + u_bar)])
-        d_4 = np.array([a_22 + np.squeeze(phi_m_r.T @ np.array([[1.]])) + (a_12 + np.squeeze(phi_m_1)) * (u_RL + u_bar)])
+        polyak_update(self.actor.non_trainable_variables, self.target_actor.non_trainable_variables, tau)
+        polyak_update(self.critic_1.non_trainable_variables, self.target_critic_1.non_trainable_variables, tau)
+        polyak_update(self.critic_2.non_trainable_variables, self.target_critic_2.non_trainable_variables, tau)
 
-        self.prob.param_dict['A_31'].value = A_31
-        self.prob.param_dict['A_41'].value = A_41
-        self.prob.param_dict['b_2'].value = b_2
-        self.prob.param_dict['b_3'].value = b_3
-        self.prob.param_dict['b_4'].value = b_4
-        self.prob.param_dict['c_31'].value = c_31
-        self.prob.param_dict['c_41'].value = c_41
-        self.prob.param_dict['d_3'].value = d_3
-        self.prob.param_dict['d_4'].value = d_4
+    def learn(self):
+        if self.memory.mem_cntr < self.batch_size:
+            return
 
-        self.prob.solve(solver='CLARABEL')
+        states, actions, rewards, next_states, dones = self.memory.sample_buffer(self.batch_size)
 
-        x_opt = self.prob.var_dict['x'].value
+        states = tf.convert_to_tensor(states, dtype=tf.float32)
+        next_states = tf.convert_to_tensor(next_states, dtype=tf.float32)
+        rewards = tf.convert_to_tensor(rewards, dtype=tf.float32)
+        actions = tf.convert_to_tensor(actions, dtype=tf.float32)
+        dones = tf.convert_to_tensor(dones, dtype=tf.float32)
 
-        A_3 = np.hstack([A_31, self.A_32.value])
-        A_4 = np.hstack([A_41, self.A_42.value])
-        c_3 = np.hstack([c_31, self.c_32.value])
-        c_4 = np.hstack([c_41, self.c_42.value])
+        self.update_critics(states, actions, rewards, next_states, dones)
+        self.learn_step_cntr += 1
 
-        A_CBF = [A_3, A_4]
-        b_CBF = [b_3, b_4]
-        c_CBF = [c_3, c_4]
-        d_CBF = [d_3, d_4]
+        if self.learn_step_cntr % self.d == 0:
+            self.update_actor(states)
+            self.update_network_trainable_parameters()
+            self.update_network_non_trainable_parameters()
 
-        return x_opt, A_CBF, b_CBF, c_CBF, d_CBF
+    @tf.function
+    def update_critics(self, states, actions, rewards, next_states, dones):
+        with tf.GradientTape() as tape1, tf.GradientTape() as tape2:
+            target_actions = self.target_actor(next_states)
+
+            epsilons = tf.clip_by_value(tf.random.normal(
+                shape=tf.shape(target_actions), stddev=self.smooth_sigma), -self.c, self.c)
+
+            smooth_actions = target_actions + epsilons
+            smooth_actions = tf.clip_by_value(smooth_actions, self.min_action,
+                                              self.max_action)
+
+            next_critic_1_value = tf.squeeze(self.target_critic_1((next_states, smooth_actions)), axis=-1)
+            next_critic_2_value = tf.squeeze(self.target_critic_2((next_states, smooth_actions)), axis=-1)
+            target = rewards + self.gamma * tf.math.minimum(next_critic_1_value, next_critic_2_value) * (1 - dones)
+            target = tf.stop_gradient(target)
+            critic_1_value = tf.squeeze(self.critic_1((states, actions), training=True), axis=-1)
+            critic_2_value = tf.squeeze(self.critic_2((states, actions), training=True), axis=-1)
+            critic_1_loss = tf.reduce_mean(tf.square(target - critic_1_value))
+            critic_2_loss = tf.reduce_mean(tf.square(target - critic_2_value))
+        params_1 = self.critic_1.trainable_variables
+        params_2 = self.critic_2.trainable_variables
+        grads_1 = tape1.gradient(critic_1_loss, params_1)
+        grads_2 = tape2.gradient(critic_2_loss, params_2)
+
+        self.critic_1_optimizer.apply_gradients(zip(grads_1, params_1))
+        self.critic_2_optimizer.apply_gradients(zip(grads_2, params_2))
+
+    @tf.function
+    def update_actor(self, states):
+        with tf.GradientTape() as tape:
+            new_actions = self.actor(states, training=True)
+            new_critic_1_value = tf.squeeze(self.critic_1((states, new_actions)), axis=-1)
+            actor_loss = tf.math.reduce_mean(- new_critic_1_value)
+        params = self.actor.trainable_variables
+        grads = tape.gradient(actor_loss, params)
+        self.actor_optimizer.apply_gradients(zip(grads, params))
