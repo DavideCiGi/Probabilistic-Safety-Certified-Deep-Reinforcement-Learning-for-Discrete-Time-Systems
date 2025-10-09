@@ -1,7 +1,7 @@
 import tensorflow as tf
 from tensorflow import keras
 from networks import ActorNetwork, CriticNetwork
-from buffer import DReplayBuffer
+from buffer import ReplayBuffer
 
 
 def polyak_update(params, target_params, tau):
@@ -22,7 +22,7 @@ class Agent:
         self.min_action = min_action
         self.d = d
         self.tau = tau
-        self.memory = DReplayBuffer(max_size, state_dim, action_dim)
+        self.memory = ReplayBuffer(max_size, state_dim, action_dim)
         self.batch_size = batch_size
         self.chkpt_dir = chkpt_dir
         self.learn_step_cntr = 0
