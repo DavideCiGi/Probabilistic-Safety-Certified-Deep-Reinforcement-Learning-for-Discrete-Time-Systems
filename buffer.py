@@ -1,7 +1,7 @@
 import numpy as np
 
 
-class DReplayBuffer:
+class ReplayBuffer:
     def __init__(self, max_size, state_dim, action_dim): 
         self.mem_size = max_size
         self.mem_cntr = 0 
@@ -37,7 +37,7 @@ class DReplayBuffer:
         return states, actions, rewards, next_states, dones
 
 
-class AReplayBuffer:
+class RolloutDataset:
     def __init__(self, max_size, state_dim, action_dim):
         self.mem_size = max_size
         self.mem_cntr = 0
@@ -51,7 +51,7 @@ class AReplayBuffer:
 
         self.mem_cntr += 1
         if self.mem_cntr == self.mem_size:
-            print('State-action replay for the compensator filled up for the first time.')
+            print('Rollout dataset for the compensator filled up for the first time.')
 
     def get_all(self):
         max_mem = min(self.mem_cntr, self.mem_size)
