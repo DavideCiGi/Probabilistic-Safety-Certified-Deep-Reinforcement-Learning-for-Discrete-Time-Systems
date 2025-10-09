@@ -1,7 +1,7 @@
 import tensorflow as tf
 from tensorflow import keras
 from networks import CompensatorNetwork
-from buffer import AReplayBuffer
+from buffer import RolloutDataset
 import numpy as np
 
 
@@ -10,7 +10,7 @@ class BarrierCompensator:
                  fc1_dims=30, fc2_dims=20, epochs=10, num_backtracking=10, chkpt_dir='models/comp/'):
         self.action_dim = action_dim
         self.max_abs_action = max(max_action, min_action)
-        self.memory = AReplayBuffer(max_size, state_dim, action_dim)
+        self.memory = RolloutDataset(max_size, state_dim, action_dim)
         self.chkpt_dir = chkpt_dir
         self.epochs = epochs
         self.bar_constraint_max = bar_constraint_max
